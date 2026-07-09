@@ -303,6 +303,7 @@ func (s *AppServer) handleListFeeds(ctx context.Context) *MCPToolResult {
 
 // handleSearchFeeds 处理搜索Feeds
 func (s *AppServer) handleSearchFeeds(ctx context.Context, args SearchFeedsArgs) *MCPToolResult {
+	start := time.Now()
 	logrus.Info("MCP: 搜索Feeds")
 
 	if args.Keyword == "" {
@@ -337,6 +338,8 @@ func (s *AppServer) handleSearchFeeds(ctx context.Context, args SearchFeedsArgs)
 		}
 	}
 
+	logrus.Infof("MCP: 搜索Feeds service 返回 count=%d elapsed=%s", result.Count, time.Since(start).Round(time.Millisecond))
+
 	// 格式化输出，转换为JSON字符串
 	jsonData, err := json.MarshalIndent(result, "", "  ")
 	if err != nil {
@@ -348,6 +351,8 @@ func (s *AppServer) handleSearchFeeds(ctx context.Context, args SearchFeedsArgs)
 			IsError: true,
 		}
 	}
+
+	logrus.Infof("MCP: 搜索Feeds 序列化完成 bytes=%d elapsed=%s", len(jsonData), time.Since(start).Round(time.Millisecond))
 
 	return &MCPToolResult{
 		Content: []MCPContent{{

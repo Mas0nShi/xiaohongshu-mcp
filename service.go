@@ -370,23 +370,39 @@ func (s *XiaohongshuService) ListFeeds(ctx context.Context) (*FeedsListResponse,
 }
 
 func (s *XiaohongshuService) SearchFeeds(ctx context.Context, keyword string, filters ...xiaohongshu.FilterOption) (*FeedsListResponse, error) {
+	start := time.Now()
 	b := newBrowser()
-	defer b.Close()
 
 	page := b.NewPage()
-	defer page.Close()
+
+	defer func() {
+		// 搜索结果已经拿到后，不要让 Chromium/Page 关闭过程阻塞 MCP 响应。
+		// 某些本地 Chrome/rod 组合在 BrowserClose 或 page.Close 上会偶发长时间等待，
+		// 表现为“搜索结果已就绪”但 POST /mcp 很久不返回。
+		go func() {
+			cleanupStart := time.Now()
+			if err := page.Close(); err != nil {
+				logrus.Warnf("搜索Feeds: 异步关闭页面失败: %v", err)
+			}
+			b.Close()
+			logrus.Infof("搜索Feeds: 异步关闭浏览器完成 elapsed=%s", time.Since(cleanupStart).Round(time.Millisecond))
+		}()
+	}()
 
 	action := xiaohongshu.NewSearchAction(page)
 
 	feeds, err := action.Search(ctx, keyword, filters...)
 	if err != nil {
+		logrus.Warnf("搜索Feeds: 搜索失败 elapsed=%s err=%v", time.Since(start).Round(time.Millisecond), err)
 		return nil, err
 	}
+	logrus.Infof("搜索Feeds: action 返回 feeds=%d elapsed=%s", len(feeds), time.Since(start).Round(time.Millisecond))
 
 	response := &FeedsListResponse{
 		Feeds: feeds,
 		Count: len(feeds),
 	}
+	logrus.Infof("搜索Feeds: service 即将返回 elapsed=%s", time.Since(start).Round(time.Millisecond))
 
 	return response, nil
 }
