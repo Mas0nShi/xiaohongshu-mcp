@@ -253,12 +253,19 @@ func (s *SearchAction) Search(ctx context.Context, keyword string, filters ...Fi
 		}
 	}
 
-	pageState := page.MustEval(`() => JSON.stringify({
-		bodyText: document.body ? document.body.innerText.slice(0, 500) : "",
-		hasLoginGate: document.body ? document.body.innerText.includes("登录后查看搜索结果") : false,
-		pathname: location.pathname,
-		url: location.href,
-	})`).String()
+	logrus.Infof("搜索Feeds: 开始读取页面状态 elapsed=%s", time.Since(start).Round(time.Millisecond))
+	var pageState string
+	if err := rod.Try(func() {
+		pageState = page.Timeout(5 * time.Second).MustEval(`() => JSON.stringify({
+			bodyText: document.body ? document.body.innerText.slice(0, 500) : "",
+			hasLoginGate: document.body ? document.body.innerText.includes("登录后查看搜索结果") : false,
+			pathname: location.pathname,
+			url: location.href,
+		})`).String()
+	}); err != nil {
+		return nil, fmt.Errorf("读取搜索页状态超时或失败: %w", err)
+	}
+	logrus.Infof("搜索Feeds: 页面状态读取完成 bytes=%d elapsed=%s", len(pageState), time.Since(start).Round(time.Millisecond))
 
 	if pageState != "" {
 		var state struct {
@@ -272,27 +279,36 @@ func (s *SearchAction) Search(ctx context.Context, keyword string, filters ...Fi
 		}
 	}
 
-	result := page.MustEval(`() => {
-		if (window.__INITIAL_STATE__ &&
-		    window.__INITIAL_STATE__.search &&
-		    window.__INITIAL_STATE__.search.feeds) {
-			const feeds = window.__INITIAL_STATE__.search.feeds;
-			const feedsData = feeds.value !== undefined ? feeds.value : feeds._value;
-			if (feedsData) {
-				return JSON.stringify(feedsData);
+	logrus.Infof("搜索Feeds: 开始提取 feeds JSON elapsed=%s", time.Since(start).Round(time.Millisecond))
+	var result string
+	if err := rod.Try(func() {
+		result = page.Timeout(5 * time.Second).MustEval(`() => {
+			if (window.__INITIAL_STATE__ &&
+			    window.__INITIAL_STATE__.search &&
+			    window.__INITIAL_STATE__.search.feeds) {
+				const feeds = window.__INITIAL_STATE__.search.feeds;
+				const feedsData = feeds.value !== undefined ? feeds.value : feeds._value;
+				if (feedsData) {
+					return JSON.stringify(feedsData);
+				}
 			}
-		}
-		return "";
-	}`).String()
+			return "";
+		}`).String()
+	}); err != nil {
+		return nil, fmt.Errorf("提取搜索结果超时或失败: %w", err)
+	}
+	logrus.Infof("搜索Feeds: feeds JSON 提取完成 bytes=%d elapsed=%s", len(result), time.Since(start).Round(time.Millisecond))
 
 	if result == "" {
 		return nil, errors.ErrNoFeeds
 	}
 
+	logrus.Infof("搜索Feeds: 开始反序列化 feeds elapsed=%s", time.Since(start).Round(time.Millisecond))
 	var feeds []Feed
 	if err := json.Unmarshal([]byte(result), &feeds); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal feeds: %w", err)
 	}
+	logrus.Infof("搜索Feeds: 反序列化完成 feeds=%d elapsed=%s", len(feeds), time.Since(start).Round(time.Millisecond))
 
 	return feeds, nil
 }
