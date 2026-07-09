@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/go-rod/rod"
-	"github.com/go-rod/rod/lib/input"
+	"github.com/sirupsen/logrus"
 	"github.com/xpzouying/xiaohongshu-mcp/errors"
 )
 
@@ -161,7 +161,7 @@ type SearchAction struct {
 }
 
 func NewSearchAction(page *rod.Page) *SearchAction {
-	pp := page.Timeout(60 * time.Second)
+	pp := page.Timeout(30 * time.Second)
 
 	return &SearchAction{page: pp}
 }
@@ -171,7 +171,7 @@ func NewSearchAction(page *rod.Page) *SearchAction {
 // 直接判断它 !== undefined 会在异步请求返回之前读到"假的空结果"。
 // 这里改为轮询等待，直到 feeds 数组非空、或明确出现登录墙/笔记链接等可判定信号；
 // 超时（8秒）后放弃等待，按当前状态继续——此时才认为是真实的零结果。
-func waitForFeedsSettled(page *rod.Page) {
+func waitForFeedsSettled(page *rod.Page, timeout time.Duration) error {
 	settledJS := `() => {
 		if (window.__INITIAL_STATE__ === undefined) return false;
 		if (document.body && document.body.innerText.includes('登录后查看搜索结果')) return true;
@@ -183,24 +183,32 @@ func waitForFeedsSettled(page *rod.Page) {
 		return document.querySelectorAll('a[href*="/explore/"]').length > 0;
 	}`
 
-	_ = rod.Try(func() {
-		page.Timeout(8 * time.Second).MustWait(settledJS)
+	return rod.Try(func() {
+		page.Timeout(timeout).MustWait(settledJS)
 	})
 }
 
 func (s *SearchAction) Search(ctx context.Context, keyword string, filters ...FilterOption) ([]Feed, error) {
+	start := time.Now()
 	page := s.page.Context(ctx)
 
-	// 搜索页直接打开经常落到“登录后查看搜索结果”的壳页。
-	// 先从首页进入，复用页面初始化后的登录态和前端上下文，再触发真实搜索。
-	page.MustNavigate("https://www.xiaohongshu.com/explore").MustWaitLoad()
-	page.MustWait(`() => document.querySelector('#search-input') !== null`)
-	searchInput := page.MustElement("#search-input")
-	searchInput.MustSelectAllText()
-	searchInput.MustInput(keyword).MustType(input.Enter)
-	page.MustWait(`() => window.location.href.includes('/search_result') || (document.body && document.body.innerText.includes('登录后查看搜索结果'))`)
-	page.MustWaitLoad()
-	waitForFeedsSettled(page)
+	// 直接打开搜索结果页比“首页输入框 + Enter”的浏览器交互更稳定。
+	// xiaohongshu SPA 的搜索输入框有时存在但暂不可交互，会卡在 SelectAll/Input；
+	// 直接 URL 搭配 waitForFeedsSettled 既能避免旧版空数组竞态，也能规避输入框遮罩/焦点问题。
+	searchURL := makeSearchURL(keyword)
+	logrus.Infof("搜索Feeds: 打开搜索结果页 keyword=%q", keyword)
+	if err := rod.Try(func() {
+		page.Timeout(20 * time.Second).MustNavigate(searchURL).MustWaitLoad()
+	}); err != nil {
+		return nil, fmt.Errorf("打开搜索结果页失败: %w", err)
+	}
+	logrus.Infof("搜索Feeds: 页面加载完成 elapsed=%s", time.Since(start).Round(time.Millisecond))
+
+	if err := waitForFeedsSettled(page, 10*time.Second); err != nil {
+		logrus.Warnf("搜索Feeds: 等待搜索结果完成超时，继续读取当前页面状态: %v", err)
+	} else {
+		logrus.Infof("搜索Feeds: 搜索结果已就绪 elapsed=%s", time.Since(start).Round(time.Millisecond))
+	}
 
 	// 将所有 FilterOption 转换为内部筛选选项
 	var allInternalFilters []internalFilterOption
@@ -237,8 +245,12 @@ func (s *SearchAction) Search(ctx context.Context, keyword string, filters ...Fi
 		}
 
 		// 搜索页会持续请求推荐流，等待 stable 容易卡死；这里只等筛选后的状态回填。
-		page.MustWaitLoad()
-		waitForFeedsSettled(page)
+		if err := rod.Try(func() { page.Timeout(10 * time.Second).MustWaitLoad() }); err != nil {
+			logrus.Warnf("搜索Feeds: 筛选后等待页面 load 超时，继续读取当前页面状态: %v", err)
+		}
+		if err := waitForFeedsSettled(page, 8*time.Second); err != nil {
+			logrus.Warnf("搜索Feeds: 筛选后等待搜索结果完成超时，继续读取当前页面状态: %v", err)
+		}
 	}
 
 	pageState := page.MustEval(`() => JSON.stringify({
