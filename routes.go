@@ -23,6 +23,11 @@ func setupRoutes(appServer *AppServer) *gin.Engine {
 	// 健康检查
 	router.GET("/health", healthHandler)
 
+	// 受保护路由组：设置 MCP_BEARER_TOKEN 后会要求 Bearer token。
+	// 未设置 MCP_BEARER_TOKEN 时保持兼容，等同于无鉴权。
+	protected := router.Group("/")
+	protected.Use(bearerAuthMiddleware())
+
 	// MCP 端点 - 使用官方 SDK 的 Streamable HTTP Handler
 	mcpHandler := mcp.NewStreamableHTTPHandler(
 		func(r *http.Request) *mcp.Server {
@@ -32,11 +37,11 @@ func setupRoutes(appServer *AppServer) *gin.Engine {
 			JSONResponse: true, // 支持 JSON 响应
 		},
 	)
-	router.Any("/mcp", gin.WrapH(mcpHandler))
-	router.Any("/mcp/*path", gin.WrapH(mcpHandler))
+	protected.Any("/mcp", gin.WrapH(mcpHandler))
+	protected.Any("/mcp/*path", gin.WrapH(mcpHandler))
 
 	// API 路由组
-	api := router.Group("/api/v1")
+	api := protected.Group("/api/v1")
 	{
 		api.GET("/login/status", appServer.checkLoginStatusHandler)
 		api.GET("/login/qrcode", appServer.getLoginQrcodeHandler)

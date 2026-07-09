@@ -83,7 +83,36 @@ docker exec -it xiaohongshu-mcp bash
 docker compose pull && docker compose up -d
 ```
 
-## 3. 使用 MCP-Inspector 进行连接
+## 3. 可选：启用 Bearer Token 鉴权
+
+默认不启用鉴权，以兼容已有客户端配置。如果服务会暴露到非本机网络，建议在 `docker-compose.yml` 的 `environment` 中添加：
+
+```yaml
+environment:
+  - ROD_BROWSER_BIN=/usr/local/bin/cloak-chromium
+  - COOKIES_PATH=/app/data/cookies.json
+  - HOME=/app/data/home
+  - XDG_CACHE_HOME=/app/data/cache
+  - XDG_CONFIG_HOME=/app/data/config
+  - MCP_BEARER_TOKEN=your-secret-token
+```
+
+启用后，访问 `/mcp` 和 `/api/v1` 都需要携带：
+
+```http
+Authorization: Bearer your-secret-token
+```
+
+验证示例：
+
+```bash
+curl -X POST http://localhost:18060/mcp \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer your-secret-token" \
+  -d '{"jsonrpc":"2.0","method":"initialize","params":{},"id":1}'
+```
+
+## 4. 使用 MCP-Inspector 进行连接
 
 **注意 IP 换成你自己的 IP**
 
@@ -93,7 +122,7 @@ docker compose pull && docker compose up -d
 
 <img width="1662" height="458" alt="image" src="https://github.com/user-attachments/assets/309c2dab-51c4-4502-a41b-cdd4a3dd57ac" />
 
-## 4. 配置代理（可选）
+## 5. 配置代理（可选）
 
 如果需要通过代理访问小红书，可以通过 `XHS_PROXY` 环境变量配置。
 
@@ -123,7 +152,7 @@ environment:
 Using proxy: http://***:***@proxy:port
 ```
 
-## 5. 扫码登录
+## 6. 扫码登录
 
 1. **重要**，一定要先把 App 提前打开，准备扫码登录。
 2. 尽快扫码，有可能二维码会过期。

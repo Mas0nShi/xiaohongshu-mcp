@@ -545,12 +545,34 @@ go run . -headless=false
 
 服务将运行在：`http://localhost:18060/mcp`
 
+#### 可选：启用 Bearer Token 鉴权
+
+默认保持兼容，不开启鉴权。若部署在公网或只想自己使用，可以设置环境变量：
+
+```bash
+export MCP_BEARER_TOKEN="your-secret-token"
+go run .
+```
+
+启用后，`/mcp` 和 `/api/v1` 接口都需要携带请求头：
+
+```http
+Authorization: Bearer your-secret-token
+```
+
+Docker Compose 可在 `environment` 中加入：
+
+```yaml
+- MCP_BEARER_TOKEN=your-secret-token
+```
+
 #### 验证服务状态
 
 ```bash
 # 测试 MCP 连接
 curl -X POST http://localhost:18060/mcp \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer your-secret-token" \
   -d '{"jsonrpc":"2.0","method":"initialize","params":{},"id":1}'
 ```
 
