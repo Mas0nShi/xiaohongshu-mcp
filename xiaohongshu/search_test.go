@@ -116,3 +116,8 @@ func TestFilterValidation(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, internalFilters, 5)
 }
+
+func TestSecurityVerificationReason(t *testing.T) {
+	require.Contains(t, securityVerificationReason("Requests too frequent. Try again later."), "停止重试")
+	require.Contains(t, securityVerificationReason("Scan with logged-in REDNote APP for account security."), "扫码安全验证")
+}

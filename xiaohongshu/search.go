@@ -6,6 +6,7 @@ import (
 	stderrors "errors"
 	"fmt"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/go-rod/rod"
@@ -179,6 +180,13 @@ func conciseRodError(err error) error {
 	return err
 }
 
+func securityVerificationReason(bodyText string) string {
+	if strings.Contains(bodyText, "Requests too frequent") || strings.Contains(bodyText, "请求过于频繁") {
+		return "请求过于频繁，请停止重试并稍后再试"
+	}
+	return "需要使用已登录的小红书 App 完成扫码安全验证"
+}
+
 func NewSearchAction(page *rod.Page) *SearchAction {
 	return &SearchAction{page: page}
 }
@@ -190,6 +198,8 @@ func NewSearchAction(page *rod.Page) *SearchAction {
 // 超时（8秒）后放弃等待，按当前状态继续——此时才认为是真实的零结果。
 func waitForFeedsSettled(page *rod.Page, timeout time.Duration) error {
 	settledJS := `() => {
+		if (location.pathname.includes('/website-login/captcha')) return true;
+		if (document.title === 'Security Verification') return true;
 		if (window.__INITIAL_STATE__ === undefined) return false;
 		if (document.body && document.body.innerText.includes('登录后查看搜索结果')) return true;
 		const search = window.__INITIAL_STATE__.search;
@@ -227,6 +237,44 @@ func (s *SearchAction) Search(ctx context.Context, keyword string, filters ...Fi
 		logrus.Warnf("搜索Feeds: 等待搜索结果完成超时，继续读取当前页面状态: %v", conciseRodError(err))
 	} else {
 		logrus.Infof("搜索Feeds: 搜索结果已就绪 elapsed=%s", time.Since(start).Round(time.Millisecond))
+	}
+
+	// 必须先识别登录墙和安全验证，再尝试操作筛选 DOM。否则验证码页面上
+	// 不存在 div.filter，旧逻辑会一直等待元素并长期占用 Chromium。
+	logrus.Infof("搜索Feeds: 开始读取页面状态 elapsed=%s", time.Since(start).Round(time.Millisecond))
+	var pageState string
+	if err := rod.Try(func() {
+		pageState = page.Timeout(5 * time.Second).MustEval(`() => JSON.stringify({
+			bodyText: document.body ? document.body.innerText.slice(0, 500) : "",
+			hasLoginGate: document.body ? document.body.innerText.includes("登录后查看搜索结果") : false,
+			isSecurityVerification: location.pathname.includes("/website-login/captcha") || document.title === "Security Verification",
+			title: document.title,
+			pathname: location.pathname,
+			url: location.href,
+		})`).String()
+	}); err != nil {
+		return nil, fmt.Errorf("读取搜索页状态超时或失败: %w", conciseRodError(err))
+	}
+	logrus.Infof("搜索Feeds: 页面状态读取完成 bytes=%d elapsed=%s", len(pageState), time.Since(start).Round(time.Millisecond))
+
+	if pageState != "" {
+		var state struct {
+			BodyText               string `json:"bodyText"`
+			HasLoginGate           bool   `json:"hasLoginGate"`
+			IsSecurityVerification bool   `json:"isSecurityVerification"`
+			Title                  string `json:"title"`
+			Pathname               string `json:"pathname"`
+			URL                    string `json:"url"`
+		}
+		if err := json.Unmarshal([]byte(pageState), &state); err != nil {
+			return nil, fmt.Errorf("解析搜索页状态失败: %w", err)
+		}
+		if state.IsSecurityVerification {
+			return nil, fmt.Errorf("搜索触发小红书安全验证（%s）: %s", securityVerificationReason(state.BodyText), state.URL)
+		}
+		if state.HasLoginGate {
+			return nil, fmt.Errorf("搜索页未进入可见结果态，当前页面提示需要登录查看搜索结果: %s", state.URL)
+		}
 	}
 
 	// 将所有 FilterOption 转换为内部筛选选项
@@ -275,32 +323,6 @@ func (s *SearchAction) Search(ctx context.Context, keyword string, filters ...Fi
 		}
 		if err := waitForFeedsSettled(page, 8*time.Second); err != nil {
 			logrus.Warnf("搜索Feeds: 筛选后等待搜索结果完成超时，继续读取当前页面状态: %v", conciseRodError(err))
-		}
-	}
-
-	logrus.Infof("搜索Feeds: 开始读取页面状态 elapsed=%s", time.Since(start).Round(time.Millisecond))
-	var pageState string
-	if err := rod.Try(func() {
-		pageState = page.Timeout(5 * time.Second).MustEval(`() => JSON.stringify({
-			bodyText: document.body ? document.body.innerText.slice(0, 500) : "",
-			hasLoginGate: document.body ? document.body.innerText.includes("登录后查看搜索结果") : false,
-			pathname: location.pathname,
-			url: location.href,
-		})`).String()
-	}); err != nil {
-		return nil, fmt.Errorf("读取搜索页状态超时或失败: %w", conciseRodError(err))
-	}
-	logrus.Infof("搜索Feeds: 页面状态读取完成 bytes=%d elapsed=%s", len(pageState), time.Since(start).Round(time.Millisecond))
-
-	if pageState != "" {
-		var state struct {
-			BodyText     string `json:"bodyText"`
-			HasLoginGate bool   `json:"hasLoginGate"`
-			Pathname     string `json:"pathname"`
-			URL          string `json:"url"`
-		}
-		if err := json.Unmarshal([]byte(pageState), &state); err == nil && state.HasLoginGate {
-			return nil, fmt.Errorf("搜索页未进入可见结果态，当前页面提示需要登录查看搜索结果: %s", state.URL)
 		}
 	}
 
