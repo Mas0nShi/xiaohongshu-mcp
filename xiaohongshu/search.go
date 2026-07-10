@@ -35,6 +35,11 @@ type internalFilterOption struct {
 	Text         string // 标签文本描述
 }
 
+const (
+	searchOperationTimeout   = 45 * time.Second
+	filterInteractionTimeout = 5 * time.Second
+)
+
 // 预定义的筛选选项映射表（内部使用）
 var filterOptionsMap = map[int][]internalFilterOption{
 	1: { // 排序依据
@@ -73,7 +78,7 @@ func convertToInternalFilters(filter FilterOption) ([]internalFilterOption, erro
 	var internalFilters []internalFilterOption
 
 	// 处理排序依据
-	if filter.SortBy != "" {
+	if filter.SortBy != "" && filter.SortBy != "综合" {
 		internal, err := findInternalOption(1, filter.SortBy)
 		if err != nil {
 			return nil, fmt.Errorf("排序依据错误: %w", err)
@@ -82,7 +87,7 @@ func convertToInternalFilters(filter FilterOption) ([]internalFilterOption, erro
 	}
 
 	// 处理笔记类型
-	if filter.NoteType != "" {
+	if filter.NoteType != "" && filter.NoteType != "不限" {
 		internal, err := findInternalOption(2, filter.NoteType)
 		if err != nil {
 			return nil, fmt.Errorf("笔记类型错误: %w", err)
@@ -91,7 +96,7 @@ func convertToInternalFilters(filter FilterOption) ([]internalFilterOption, erro
 	}
 
 	// 处理发布时间
-	if filter.PublishTime != "" {
+	if filter.PublishTime != "" && filter.PublishTime != "不限" {
 		internal, err := findInternalOption(3, filter.PublishTime)
 		if err != nil {
 			return nil, fmt.Errorf("发布时间错误: %w", err)
@@ -100,7 +105,7 @@ func convertToInternalFilters(filter FilterOption) ([]internalFilterOption, erro
 	}
 
 	// 处理搜索范围
-	if filter.SearchScope != "" {
+	if filter.SearchScope != "" && filter.SearchScope != "不限" {
 		internal, err := findInternalOption(4, filter.SearchScope)
 		if err != nil {
 			return nil, fmt.Errorf("搜索范围错误: %w", err)
@@ -109,7 +114,7 @@ func convertToInternalFilters(filter FilterOption) ([]internalFilterOption, erro
 	}
 
 	// 处理位置距离
-	if filter.Location != "" {
+	if filter.Location != "" && filter.Location != "不限" {
 		internal, err := findInternalOption(5, filter.Location)
 		if err != nil {
 			return nil, fmt.Errorf("位置距离错误: %w", err)
@@ -175,9 +180,7 @@ func conciseRodError(err error) error {
 }
 
 func NewSearchAction(page *rod.Page) *SearchAction {
-	pp := page.Timeout(30 * time.Second)
-
-	return &SearchAction{page: pp}
+	return &SearchAction{page: page}
 }
 
 // waitForFeedsSettled 等待搜索结果异步数据真正加载完成。
@@ -204,7 +207,9 @@ func waitForFeedsSettled(page *rod.Page, timeout time.Duration) error {
 
 func (s *SearchAction) Search(ctx context.Context, keyword string, filters ...FilterOption) ([]Feed, error) {
 	start := time.Now()
-	page := s.page.Context(ctx)
+	searchCtx, cancel := context.WithTimeout(ctx, searchOperationTimeout)
+	defer cancel()
+	page := s.page.Context(searchCtx)
 
 	// 直接打开搜索结果页比“首页输入框 + Enter”的浏览器交互更稳定。
 	// xiaohongshu SPA 的搜索输入框有时存在但暂不可交互，会卡在 SelectAll/Input；
@@ -243,19 +248,25 @@ func (s *SearchAction) Search(ctx context.Context, keyword string, filters ...Fi
 			}
 		}
 
-		// 悬停在筛选按钮上
-		filterButton := page.MustElement(`div.filter`)
-		filterButton.MustHover()
-
-		// 等待筛选面板出现
-		page.MustWait(`() => document.querySelector('div.filter-panel') !== null`)
+		// 页面结构或风控状态变化时筛选按钮可能不存在。所有 DOM 操作都必须
+		// 使用独立短超时，不能让一个筛选项永久占用 Chromium 执行槽。
+		if err := rod.Try(func() {
+			filterPage := page.Timeout(filterInteractionTimeout)
+			filterPage.MustElement(`div.filter`).MustHover()
+			filterPage.MustWait(`() => document.querySelector('div.filter-panel') !== null`)
+		}); err != nil {
+			return nil, fmt.Errorf("打开搜索筛选面板超时或失败: %w", conciseRodError(err))
+		}
 
 		// 应用所有筛选条件
 		for _, filter := range allInternalFilters {
 			selector := fmt.Sprintf(`div.filter-panel div.filters:nth-child(%d) div.tags:nth-child(%d)`,
 				filter.FiltersIndex, filter.TagsIndex)
-			option := page.MustElement(selector)
-			option.MustClick()
+			if err := rod.Try(func() {
+				page.Timeout(filterInteractionTimeout).MustElement(selector).MustClick()
+			}); err != nil {
+				return nil, fmt.Errorf("应用筛选项 %q 超时或失败: %w", filter.Text, conciseRodError(err))
+			}
 		}
 
 		// 搜索页会持续请求推荐流，等待 stable 容易卡死；这里只等筛选后的状态回填。

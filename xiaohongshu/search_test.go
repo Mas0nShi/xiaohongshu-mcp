@@ -68,12 +68,25 @@ func TestSearchWithFilters(t *testing.T) {
 }
 
 func TestFilterValidation(t *testing.T) {
+	// MCP 客户端常会把 schema 默认值也显式传入。这些值不改变搜索结果，
+	// 不应触发筛选面板 DOM 操作。
+	defaultFilter := FilterOption{
+		SortBy:      "综合",
+		NoteType:    "不限",
+		PublishTime: "不限",
+		SearchScope: "不限",
+		Location:    "不限",
+	}
+	internalFilters, err := convertToInternalFilters(defaultFilter)
+	require.NoError(t, err)
+	require.Empty(t, internalFilters)
+
 	// 测试有效的筛选选项转换
 	validFilter := FilterOption{
 		NoteType:    "图文",
 		PublishTime: "一天内",
 	}
-	internalFilters, err := convertToInternalFilters(validFilter)
+	internalFilters, err = convertToInternalFilters(validFilter)
 	require.NoError(t, err)
 	require.Len(t, internalFilters, 2)
 
