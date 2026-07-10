@@ -493,6 +493,18 @@ XHS_PROXY=http://proxy:port go run .
 
 支持 HTTP/HTTPS/SOCKS5 代理，日志中会自动隐藏代理的认证信息。
 
+**控制浏览器资源占用（可选）**：
+
+每个工具调用需要启动 Chromium，单实例通常会占用数百 MB 内存。服务默认仅允许 1 个浏览器实例执行，其余调用排队，从而避免多个 MCP 请求同时到达时内存和 CPU 突增。
+
+如机器资源充足并且确实需要并发，可显式调整：
+
+```bash
+XHS_BROWSER_CONCURRENCY=2 ./xiaohongshu-mcp-darwin-arm64
+```
+
+建议保持默认值 `1`；允许范围为 `1` 到 `16`。
+
 ## 1.4. 验证 MCP
 
 ```bash

@@ -462,6 +462,18 @@ go run .
 go run . -headless=false
 ```
 
+**Control browser resource usage (optional):**
+
+Each browser-backed tool call starts Chromium, which commonly consumes hundreds of MB. By default, only one browser instance runs at a time and additional calls wait in a queue, preventing concurrent MCP requests or retries from exhausting memory and CPU.
+
+On a machine with sufficient resources, parallelism can be enabled explicitly:
+
+```bash
+XHS_BROWSER_CONCURRENCY=2 ./xiaohongshu-mcp-darwin-arm64
+```
+
+Keeping the default value `1` is recommended. Valid values are `1` through `16`.
+
 ## 1.4. Verify MCP
 
 ```bash

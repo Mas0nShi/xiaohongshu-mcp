@@ -3,6 +3,7 @@ package xiaohongshu
 import (
 	"context"
 	"encoding/json"
+	stderrors "errors"
 	"fmt"
 	"net/url"
 	"time"
@@ -160,6 +161,19 @@ type SearchAction struct {
 	page *rod.Page
 }
 
+// conciseRodError unwraps rod.TryError without including the captured goroutine
+// stack in expected timeout logs and API responses.
+func conciseRodError(err error) error {
+	var tryErr *rod.TryError
+	if stderrors.As(err, &tryErr) {
+		if cause, ok := tryErr.Value.(error); ok {
+			return cause
+		}
+		return fmt.Errorf("%v", tryErr.Value)
+	}
+	return err
+}
+
 func NewSearchAction(page *rod.Page) *SearchAction {
 	pp := page.Timeout(30 * time.Second)
 
@@ -200,12 +214,12 @@ func (s *SearchAction) Search(ctx context.Context, keyword string, filters ...Fi
 	if err := rod.Try(func() {
 		page.Timeout(20 * time.Second).MustNavigate(searchURL).MustWaitLoad()
 	}); err != nil {
-		return nil, fmt.Errorf("打开搜索结果页失败: %w", err)
+		return nil, fmt.Errorf("打开搜索结果页失败: %w", conciseRodError(err))
 	}
 	logrus.Infof("搜索Feeds: 页面加载完成 elapsed=%s", time.Since(start).Round(time.Millisecond))
 
 	if err := waitForFeedsSettled(page, 10*time.Second); err != nil {
-		logrus.Warnf("搜索Feeds: 等待搜索结果完成超时，继续读取当前页面状态: %v", err)
+		logrus.Warnf("搜索Feeds: 等待搜索结果完成超时，继续读取当前页面状态: %v", conciseRodError(err))
 	} else {
 		logrus.Infof("搜索Feeds: 搜索结果已就绪 elapsed=%s", time.Since(start).Round(time.Millisecond))
 	}
@@ -246,10 +260,10 @@ func (s *SearchAction) Search(ctx context.Context, keyword string, filters ...Fi
 
 		// 搜索页会持续请求推荐流，等待 stable 容易卡死；这里只等筛选后的状态回填。
 		if err := rod.Try(func() { page.Timeout(10 * time.Second).MustWaitLoad() }); err != nil {
-			logrus.Warnf("搜索Feeds: 筛选后等待页面 load 超时，继续读取当前页面状态: %v", err)
+			logrus.Warnf("搜索Feeds: 筛选后等待页面 load 超时，继续读取当前页面状态: %v", conciseRodError(err))
 		}
 		if err := waitForFeedsSettled(page, 8*time.Second); err != nil {
-			logrus.Warnf("搜索Feeds: 筛选后等待搜索结果完成超时，继续读取当前页面状态: %v", err)
+			logrus.Warnf("搜索Feeds: 筛选后等待搜索结果完成超时，继续读取当前页面状态: %v", conciseRodError(err))
 		}
 	}
 
@@ -263,7 +277,7 @@ func (s *SearchAction) Search(ctx context.Context, keyword string, filters ...Fi
 			url: location.href,
 		})`).String()
 	}); err != nil {
-		return nil, fmt.Errorf("读取搜索页状态超时或失败: %w", err)
+		return nil, fmt.Errorf("读取搜索页状态超时或失败: %w", conciseRodError(err))
 	}
 	logrus.Infof("搜索Feeds: 页面状态读取完成 bytes=%d elapsed=%s", len(pageState), time.Since(start).Round(time.Millisecond))
 
@@ -295,7 +309,7 @@ func (s *SearchAction) Search(ctx context.Context, keyword string, filters ...Fi
 			return "";
 		}`).String()
 	}); err != nil {
-		return nil, fmt.Errorf("提取搜索结果超时或失败: %w", err)
+		return nil, fmt.Errorf("提取搜索结果超时或失败: %w", conciseRodError(err))
 	}
 	logrus.Infof("搜索Feeds: feeds JSON 提取完成 bytes=%d elapsed=%s", len(result), time.Since(start).Round(time.Millisecond))
 

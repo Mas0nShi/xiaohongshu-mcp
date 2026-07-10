@@ -94,6 +94,7 @@ environment:
   - HOME=/app/data/home
   - XDG_CACHE_HOME=/app/data/cache
   - XDG_CONFIG_HOME=/app/data/config
+  - XHS_BROWSER_CONCURRENCY=1
   - MCP_BEARER_TOKEN=your-secret-token
 ```
 
@@ -152,7 +153,20 @@ environment:
 Using proxy: http://***:***@proxy:port
 ```
 
-## 6. 扫码登录
+## 6. 控制浏览器资源占用（可选）
+
+Chromium 单实例通常会占用数百 MB 内存。镜像默认设置 `XHS_BROWSER_CONCURRENCY=1`，使浏览器工具调用串行执行，避免 MCP 客户端并发或重试时内存、CPU 突增。
+
+资源充足且需要并行时可调高，例如：
+
+```yaml
+environment:
+  - XHS_BROWSER_CONCURRENCY=2
+```
+
+建议保持默认值 `1`；允许范围为 `1` 到 `16`。
+
+## 7. 扫码登录
 
 1. **重要**，一定要先把 App 提前打开，准备扫码登录。
 2. 尽快扫码，有可能二维码会过期。

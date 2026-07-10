@@ -17,6 +17,8 @@ services:
       - HOME=/app/data/home
       - XDG_CACHE_HOME=/app/data/cache
       - XDG_CONFIG_HOME=/app/data/config
+      # Chromium 单实例通常会占用数百 MB；默认串行执行，避免并发调用耗尽内存。
+      - XHS_BROWSER_CONCURRENCY=${XHS_BROWSER_CONCURRENCY:-1}
       # 可选：启用 Bearer token 鉴权。启用后访问 /mcp 和 /api/v1 需要：
       # Authorization: Bearer your-secret-token
       # - MCP_BEARER_TOKEN=your-secret-token
